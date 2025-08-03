@@ -1,6 +1,6 @@
 # GitHub Org Activity Report
 
-Generate actionable, organization-wide or user📊 Columns Explained
+Generate organization-wide or user specific github metrics
 
 ---
 
@@ -29,7 +29,7 @@ Generate actionable, organization-wide or user📊 Columns Explained
 ## 🏗️ Requirements
 
 - Python 3.9+
-- `pip install requests pandas python-dateutil`
+- `pip install -q requests pandas python-dateutil tqdm`
 
 ---
 
@@ -95,19 +95,12 @@ Each row = one user, totals/averages for the window.
 - **Rate limits?** Script auto-retries and sleeps if it hits GitHub API rate limits. Increase your sleep interval in run_gql if you hit problems.
 - **Time zones:** All activity hours are in UTC. Add 10 for AEST, 11 for AEDT, etc.
 
-**Advanced:**
-
-- Add visualizations (Pandas, matplotlib, seaborn, etc)
-- Use the output in Metabase, Power BI, or Google Sheets for dashboards
-
 ## 🧑‍💻 Example
 
 ```bash
 export GH_TOKEN=ghp_abc123...
 python github_org_activity_report.py --org slypreceipts --since 2025-05-01 --until 2025-07-31
 ```
-
-Then open the CSVs in Excel, Google Sheets, or your BI tool of choice!
 
 🙋‍♂️ Need help?
 If you see “rate limit” errors, try increasing your sleep or splitting up the org into batches.
