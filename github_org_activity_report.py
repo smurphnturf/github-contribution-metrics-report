@@ -64,6 +64,7 @@ def paginate(query, variables, path):
     while True:
         v = variables | {"after": cursor}
         data = run_gql(query, v)
+        time.sleep(0.6)
         node = data
         for p in path:
             node = node[p]
@@ -85,17 +86,31 @@ def get_org_members(org):
     }"""
     return [m["login"] for m in paginate(q, {"org": org}, ["organization", "membersWithRole"])]
 
-def get_top_repos(org, limit=30):
-    q = """
-    query($org:String!){
-      organization(login:$org){
-        repositories(first:100, orderBy:{field:PUSHED_AT, direction:DESC}){
-          nodes{ name nameWithOwner updatedAt }
-        }
-      }
-    }"""
-    data = run_gql(q, {"org": org})
-    return [r["name"] for r in data["organization"]["repositories"]["nodes"][:limit]]
+def get_top_repos(org, limit=20, prefix=None):
+  """
+  Fetches the top repositories for an organization, optionally filtering by name prefix.
+
+  Args:
+    org (str): GitHub organization name.
+    limit (int): Maximum number of repositories to return.
+    prefix (str, optional): If provided, only repos starting with this prefix are returned.
+
+  Returns:
+    list: List of repository names.
+  """
+  q = """
+  query($org:String!){
+    organization(login:$org){
+    repositories(first:100, orderBy:{field:PUSHED_AT, direction:DESC}){
+      nodes{ name nameWithOwner updatedAt }
+    }
+    }
+  }"""
+  data = run_gql(q, {"org": org})
+  repos = [r["name"] for r in data["organization"]["repositories"]["nodes"]]
+  if prefix:
+    repos = [name for name in repos if name.startswith(prefix)]
+  return repos[:limit]
 
 def in_window(ts, since, until):
     dt = dtp.parse(ts).replace(tzinfo=None)
@@ -177,6 +192,7 @@ def collect_user_data(org, user, repos, since=None, until=None):
     # Collect approvals and comments given (on PRs not by self)
     approvals_seen = set()
     conversations_seen = set()
+    threads_seen = set()
     for repo in repos:
         window_filter = ""
         if since and until:
@@ -185,20 +201,20 @@ def collect_user_data(org, user, repos, since=None, until=None):
             window_filter = f" created:>={since.strftime('%Y-%m-%d')}"
         elif until:
             window_filter = f" created:<={until.strftime('%Y-%m-%d')}"
-        # This will scope to PRs in the repo and date window
-        search_str = f"org:{org} repo:{org}/{repo} is:pr{window_filter}"
+        # Add -author:{user} to exclude PRs authored by the current user
+        search_str = f"org:{org} repo:{org}/{repo} is:pr -author:{user}{window_filter}"
         review_search_query = """
         query($query:String!, $after:String){
           search(query:$query, type:ISSUE, first:100, after:$after){
             pageInfo { hasNextPage endCursor }
             nodes {
               ... on PullRequest {
-                number
-                repository { name }
-                author { login }
-                createdAt
-                comments(first:50){ nodes{ author{login} createdAt } }
-                reviews(first:50){ nodes{ author{login} createdAt state } }
+          number
+          repository { name }
+          author { login }
+          createdAt
+          comments(first:50){ nodes{ author{login} createdAt } }
+          reviews(first:50){ nodes{ author{login} createdAt state } }
               }
             }
           }
@@ -222,6 +238,7 @@ def collect_user_data(org, user, repos, since=None, until=None):
                         hour_counter_by_month[month][ts.hour] += 1
             # Approvals given (on others' PRs)
             approval_key = (repo_name, pr_num)
+            threads_seen_key = (repo_name, pr_num)
             was_approver = False
             for r in pr["reviews"]["nodes"]:
                 if r["author"] and r["author"]["login"] == user and pr_author != user and r["state"] == "APPROVED":
@@ -256,8 +273,11 @@ def collect_user_data(org, user, repos, since=None, until=None):
                     }
                   }
                 }"""
-                if pr_author != user and pr_num and repo_name and was_approver:
+                if pr_author != user and pr_num and repo_name and was_approver and threads_seen_key not in threads_seen:
                   pr_data = run_gql(thread_query, {"org": org, "repo": repo_name, "prNum": int(pr_num)})
+                  time.sleep(0.6)
+                  if threads_seen_key not in threads_seen:
+                      threads_seen.add(threads_seen_key)
                   threads = pr_data["repository"]["pullRequest"]["reviewThreads"]["nodes"]
                   for th in threads:
                       if th["comments"]["nodes"]:
@@ -326,10 +346,20 @@ def main():
 
     members = [args.user] if args.user else get_org_members(args.org)
     repos = get_top_repos(args.org)
+    print(f"Evaluating repos: {repos}")
     all_results = []
     for user in members:
+        # List of users to skip
+        skip_users = {"user0", "user1"}  # Replace with actual usernames to skip
+        if user in skip_users:
+            print(f"Skipping {user}...")
+            continue
         print(f"Processing {user}...")
+        start_time = time.time()
         df = collect_user_data(args.org, user, repos, since, until)
+        elapsed = time.time() - start_time
+        mins, secs = divmod(elapsed, 60)
+        print(f"Finished processing {user} in {int(mins)}m {secs:.2f}s.")
         if not df.empty:
             # Per-user month-by-month
             df.to_csv(f"{user}_{args.org}_summary.csv", index=False)
@@ -360,3 +390,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
